@@ -7,6 +7,7 @@ const cheerio = require('cheerio');
 
 const app = express();
 
+// --- 1. SECURITY: CORS Configuration ---
 const allowedOrigins = [
     'https://lkl-app-essentials-b7f0c4.gitlab.io', 
     'http://localhost:3000', 
@@ -23,12 +24,31 @@ app.use(cors({
     }
 }));
 
+// --- 2. Database Connection ---
 const MONGO_URI = "mongodb+srv://lanka_lift_solutions:LxXW74Xt1QzGLt46@cluster0.lz5w8jt.mongodb.net/LankaLiftDB?appName=Cluster0";
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log("✅ Database Connected Successfully!"))
+  .then(async () => {
+      console.log("✅ Database Connected Successfully!");
+      
+      // 🧹 BUG FIX: Database Cleanup Script
+      // This explicitly deletes the "Dirty Data" (Draw 3073) that accidentally 
+      // saved under other lotteries during initial web scraping tests.
+      try {
+          const deleteResult = await Lottery.deleteMany({ 
+              drawNo: '3073', 
+              lotteryCode: { $ne: 'ada-kotipathi' } 
+          });
+          if (deleteResult.deletedCount > 0) {
+              console.log(`🧹 Cleaned up ${deleteResult.deletedCount} invalid records for draw 3073.`);
+          }
+      } catch (err) {
+          console.error("Cleanup Error:", err.message);
+      }
+  })
   .catch(err => console.error("❌ Database Connection Error:", err));
 
+// --- 3. Database Schema ---
 const LotterySchema = new mongoose.Schema({
     lotteryCode: String,
     lotteryName: String,
@@ -40,6 +60,7 @@ const LotterySchema = new mongoose.Schema({
 });
 const Lottery = mongoose.model('LotteryResult', LotterySchema);
 
+// --- 4. Lotteries Configuration ---
 const nlbLotteries = [
     { code: 'dhana-nidhanaya', name: 'Dhana Nidhanaya', id: '29022b19-c690-42d6-aacf-4128b4802bfa' },
     { code: 'ada-sampatha', name: 'Ada Sampatha', id: 'b4518a72-573e-4145-82c9-4c6dd91f8ec5' },
@@ -86,8 +107,10 @@ function extractZodiacFromUrl(url) {
     return "";
 }
 
+// --- 5. Data Fetching Functions ---
+
 async function fetchAndSaveNLBData() {
-    console.log(`[${new Date().toLocaleString()}] 🔄 Running NLB Scraper...`);
+    console.log(`[${new Date().toLocaleString()}] 🔄 Running NLB Scraper (Latest 3 draws)...`);
     for (const lottery of nlbLotteries) {
         try {
             const API_URL = `https://app.gtw.884.lk/gateway/LotteryManagement-app1952/SearchLotteryResults?page=1&limit=3&productId=${lottery.id}`;
@@ -100,46 +123,51 @@ async function fetchAndSaveNLBData() {
                 let numbersArray = [];
                 let engLetter = "";
                 
-                // Ada Sampatha (Always has ARANGE, BRANGE, CRANGE)
                 if (lottery.code === 'ada-sampatha') {
                     engLetter = winInfo.CHAR || "";
                     if (winInfo.ARANGE) numbersArray.push(String(winInfo.ARANGE));
                     if (winInfo.BRANGE) numbersArray.push(String(winInfo.BRANGE));
                     if (winInfo.CRANGE) numbersArray.push(String(winInfo.CRANGE));
                 } 
-                // Jaya & Mahajana Sampatha (Always has RECD)
+                else if (lottery.code === 'suba-dawasak') {
+                    engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
+                    if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
+                    if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
+                    if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
+                    // REMOVED: The SP1 4-digit number section has been deleted here.
+                } 
                 else if (lottery.code === 'jaya' || lottery.code === 'mahajana-sampatha') {
                     engLetter = winInfo.CHAR || "";
                     if (winInfo.RECD) numbersArray = String(winInfo.RECD).split(''); 
                     
-                    if (winInfo.SUN != null && String(winInfo.SUN).trim() !== "") numbersArray.push(String(winInfo.SUN).trim());
-                    if (winInfo.SP1 != null && String(winInfo.SP1).trim() !== "") numbersArray.push(String(winInfo.SP1).trim());
+                    // SUNDAY SPECIAL FIX: Pad and add special number if exists (for Jaya)
+                    if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
+                        numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
+                    } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
+                        numbersArray.push(String(winInfo.SP1).padStart(4, '0'));
+                    }
                 } 
-                // Handahana (Always N1 to N4)
                 else if (lottery.code === 'handahana') {
                     engLetter = winInfo.LAGNA ? getZodiacName(winInfo.LAGNA) : "";
-                    for (let i = 1; i <= 4; i++) {
-                        if (winInfo[`N${i}`] != null && String(winInfo[`N${i}`]).trim() !== "") {
-                            numbersArray.push(String(winInfo[`N${i}`]).trim());
-                        }
-                    }
+                    if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
+                    if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
+                    if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
+                    if (winInfo.N4 !== undefined) numbersArray.push(String(winInfo.N4));
                 } 
-                // ALL OTHER LOTTERIES (Suba Dawasak, Dhana Nidhanaya, Govi Setha, Mega Power)
-                // "DUMB PIPE LOGIC" - Just push whatever valid numbers are found!
                 else {
-                    if (lottery.code === 'suba-dawasak') engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
-                    else engLetter = winInfo.CHAR || "";
-                    
+                    // Standard logic (Dhana Nidhanaya, Govi Setha, Mega Power)
+                    engLetter = winInfo.CHAR || ""; // Removed SUN from here to prevent letter bug
                     for (let i = 1; i <= 8; i++) {
-                        if (winInfo[`N${i}`] != null && String(winInfo[`N${i}`]).trim() !== "") {
-                            numbersArray.push(String(winInfo[`N${i}`]).trim());
+                        if (winInfo[`N${i}`] !== undefined && String(winInfo[`N${i}`]).trim() !== "") {
+                            numbersArray.push(String(winInfo[`N${i}`]));
                         }
                     }
-                    if (winInfo.SP1 != null && String(winInfo.SP1).trim() !== "") {
-                        numbersArray.push(String(winInfo.SP1).trim());
-                    }
-                    if (winInfo.SUN != null && String(winInfo.SUN).trim() !== "") {
-                        numbersArray.push(String(winInfo.SUN).trim());
+                    
+                    // SUNDAY SPECIAL FIX: (For Dhana Nidhanaya)
+                    if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
+                        numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
+                    } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
+                        numbersArray.push(String(winInfo.SP1).padStart(4, '0'));
                     }
                 }
 
@@ -149,6 +177,7 @@ async function fetchAndSaveNLBData() {
                     { upsert: true, returnDocument: 'after' }
                 );
             }
+            console.log(`✅ NLB Updated: ${lottery.name} (Top 3 draws check complete)`);
         } catch (error) {
             console.error(`❌ NLB Error (${lottery.name}):`, error.message);
         }
@@ -216,6 +245,7 @@ async function fetchAndSaveDLBData() {
                     { lotteryName: lottery.name, date: drawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
                     { upsert: true, returnDocument: 'after' }
                 );
+                console.log(`✅ DLB Scraped & Updated: ${lottery.name} (Draw: ${drawNo})`);
             }
         }
     } catch (error) {
@@ -223,6 +253,7 @@ async function fetchAndSaveDLBData() {
     }
 }
 
+// Helper Wrappers for Cron
 async function runAllScrapers() {
     await fetchAndSaveNLBData();
     await fetchAndSaveDLBData();
@@ -231,14 +262,28 @@ async function runDLBScraperOnly() {
     await fetchAndSaveDLBData();
 }
 
+// --- 6. Cron Jobs ---
+
+// 1. DLB Exclusive Checks: 7:00 AM and 6:30 PM (18:30)
 cron.schedule('0 7,18 * * *', runDLBScraperOnly, { timezone: "Asia/Colombo" });
+
+// 2. Combined Check (NLB + DLB) at 1:30 PM (13:30)
 cron.schedule('30 13 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
+
+// 3. Night Polling (9:30 PM to 1:00 AM) - Every 15 minutes for both NLB & DLB
 cron.schedule('30,45 21 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0,15,30,45 22,23,0 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0 1 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 
-app.get('/api/ping', (req, res) => { res.status(200).send('Server is Awake and Running!'); });
 
+// --- 7. API Endpoints ---
+
+// Endpoint for UptimeRobot
+app.get('/api/ping', (req, res) => {
+    res.status(200).send('Server is Awake and Running!');
+});
+
+// Endpoint 1: Get the absolute latest result
 app.get('/api/latest-result', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -247,9 +292,12 @@ app.get('/api/latest-result', async (req, res) => {
         const latest = await Lottery.findOne({ lotteryCode: reqCode }).sort({ date: -1, fetchedAt: -1 });
         if(latest) res.json(latest);
         else res.status(404).json({ message: "No data found for this lottery." });
-    } catch (error) { res.status(500).json({ error: "Server Error" }); }
+    } catch (error) {
+        res.status(500).json({ error: "Server Error" });
+    }
 });
 
+// Endpoint 2: Get History
 app.get('/api/history', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -258,9 +306,12 @@ app.get('/api/history', async (req, res) => {
 
         const history = await Lottery.find({ lotteryCode: reqCode }).sort({ date: -1, fetchedAt: -1 }).limit(limit);
         res.json(history);
-    } catch (error) { res.status(500).json({ error: "Server Error" }); }
+    } catch (error) {
+        res.status(500).json({ error: "Server Error" });
+    }
 });
 
+// Endpoint 3: Search Specific Result
 app.get('/api/search-result', async (req, res) => {
     try {
         const { lottery, drawNo } = req.query;
@@ -269,12 +320,14 @@ app.get('/api/search-result', async (req, res) => {
         const result = await Lottery.findOne({ lotteryCode: lottery, drawNo: drawNo });
         if(result) res.json(result);
         else res.status(404).json({ message: "No data found." });
-    } catch (error) { res.status(500).json({ error: "Server Error" }); }
+    } catch (error) {
+        res.status(500).json({ error: "Server Error" });
+    }
 });
 
+// --- 8. Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 Server running on port ${PORT}...`);
-    // Run fetch on startup to overwrite bad data immediately
     await runAllScrapers(); 
 });
