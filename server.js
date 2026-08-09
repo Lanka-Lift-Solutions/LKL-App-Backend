@@ -8,7 +8,6 @@ const cheerio = require('cheerio');
 const app = express();
 
 // --- 1. SECURITY: CORS Configuration ---
-// Only your GitLab frontend and local development servers can access this API
 const allowedOrigins = [
     'https://lkl-app-essentials-b7f0c4.gitlab.io', 
     'http://localhost:3000', 
@@ -94,16 +93,18 @@ function extractZodiacFromUrl(url) {
 // --- 5. Data Fetching Functions ---
 
 async function fetchAndSaveNLBData() {
-    console.log("🔄 Running NLB Scraper...");
+    console.log(`[${new Date().toLocaleString()}] 🔄 Running NLB Scraper (Latest 3 draws)...`);
     for (const lottery of nlbLotteries) {
         try {
-            const API_URL = `https://app.gtw.884.lk/gateway/LotteryManagement-app1952/SearchLotteryResults?page=1&limit=1&productId=${lottery.id}`;
+            // UPDATED: limit=3 to catch any delayed draws
+            const API_URL = `https://app.gtw.884.lk/gateway/LotteryManagement-app1952/SearchLotteryResults?page=1&limit=3&productId=${lottery.id}`;
             const response = await axios.get(API_URL);
-            const latestDraw = response.data.data ? response.data.data[0] : null;
+            const recentDraws = response.data.data || [];
 
-            if (latestDraw) {
-                const drawNo = latestDraw.LotteryDrawId;
-                const winInfo = latestDraw.LotteryWiningInfo;
+            // Loop through the latest 3 draws and upsert each one
+            for (const draw of recentDraws) {
+                const drawNo = draw.LotteryDrawId;
+                const winInfo = draw.LotteryWiningInfo;
                 let numbersArray = [];
                 let engLetter = "";
                 
@@ -136,10 +137,11 @@ async function fetchAndSaveNLBData() {
 
                 await Lottery.findOneAndUpdate(
                     { lotteryCode: lottery.code, drawNo: drawNo },
-                    { lotteryName: lottery.name, date: latestDraw.DrawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
+                    { lotteryName: lottery.name, date: draw.DrawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
                     { upsert: true, returnDocument: 'after' }
                 );
             }
+            console.log(`✅ NLB Updated: ${lottery.name} (Top 3 draws check complete)`);
         } catch (error) {
             console.error(`❌ NLB Error (${lottery.name}):`, error.message);
         }
@@ -148,7 +150,7 @@ async function fetchAndSaveNLBData() {
 }
 
 async function fetchAndSaveDLBData() {
-    console.log("🔄 Running DLB Scraper...");
+    console.log(`[${new Date().toLocaleString()}] 🔄 Running DLB Scraper...`);
     try {
         const response = await axios.get('https://www.dlb.lk/result/en', {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
@@ -207,6 +209,7 @@ async function fetchAndSaveDLBData() {
                     { lotteryName: lottery.name, date: drawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
                     { upsert: true, returnDocument: 'after' }
                 );
+                console.log(`✅ DLB Scraped & Updated: ${lottery.name} (Draw:${drawNo})`);
             }
         }
     } catch (error) {
@@ -214,34 +217,37 @@ async function fetchAndSaveDLBData() {
     }
 }
 
+// Helper Wrappers for Cron
 async function runAllScrapers() {
-    console.log(`[${new Date().toLocaleString()}] Initiating Scheduled Scrape...`);
     await fetchAndSaveNLBData();
     await fetchAndSaveDLBData();
-    console.log(`[${new Date().toLocaleString()}] Scrape Completed.`);
+}
+async function runDLBScraperOnly() {
+    await fetchAndSaveDLBData();
 }
 
-// --- 6. Cron Jobs (9:30 PM to 1:00 AM Polling) ---
-// We use 3 separate cron schedules to cover this exact window every 15 minutes.
+// --- 6. Cron Jobs ---
 
-// Schedule 1: 9:30 PM and 9:45 PM
+// 1. DLB Exclusive Checks: 7:00 AM and 6:30 PM (18:30)
+cron.schedule('0 7,18 * * *', runDLBScraperOnly, { timezone: "Asia/Colombo" });
+
+// 2. Combined Check (NLB + DLB) at 1:30 PM (13:30)
+cron.schedule('30 13 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
+
+// 3. Night Polling (9:30 PM to 1:00 AM) - Every 15 minutes for both NLB & DLB
 cron.schedule('30,45 21 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
-
-// Schedule 2: Every 15 minutes during 10:00 PM, 11:00 PM, and 12:00 AM
 cron.schedule('0,15,30,45 22,23,0 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
-
-// Schedule 3: Exactly at 1:00 AM (Final Check)
 cron.schedule('0 1 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 
 
 // --- 7. API Endpoints ---
 
-// Endpoint for UptimeRobot (Keeps Render Awake)
+// Endpoint for UptimeRobot
 app.get('/api/ping', (req, res) => {
     res.status(200).send('Server is Awake and Running!');
 });
 
-// Endpoint 1: Get the absolute latest result (For main cards)
+// Endpoint 1: Get the absolute latest result
 app.get('/api/latest-result', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -255,7 +261,7 @@ app.get('/api/latest-result', async (req, res) => {
     }
 });
 
-// Endpoint 2: Get History (Last X draws)
+// Endpoint 2: Get History
 app.get('/api/history', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -269,15 +275,13 @@ app.get('/api/history', async (req, res) => {
     }
 });
 
-// Endpoint 3: Search Specific Result (By Draw Number)
+// Endpoint 3: Search Specific Result
 app.get('/api/search-result', async (req, res) => {
     try {
         const { lottery, drawNo } = req.query;
         if(!lottery || !drawNo) return res.status(400).json({ error: "Lottery code and Draw Number are required." });
 
-        // Searching primarily by drawNo as it is globally unique per lottery
         const result = await Lottery.findOne({ lotteryCode: lottery, drawNo: drawNo });
-        
         if(result) res.json(result);
         else res.status(404).json({ message: "No data found." });
     } catch (error) {
@@ -289,6 +293,6 @@ app.get('/api/search-result', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 Server running on port ${PORT}...`);
-    // Run fetch process once when the server starts
+    // Optional: Runs once immediately when server restarts
     await runAllScrapers(); 
 });
