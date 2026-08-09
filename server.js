@@ -128,15 +128,32 @@ async function fetchAndSaveNLBData() {
                     if (winInfo.CRANGE) numbersArray.push(String(winInfo.CRANGE));
                 } 
                 else if (lottery.code === 'suba-dawasak') {
-                    // SUBA DAWASAK FIX: Dynamically handle both formats (7 normal numbers vs 3 normal + 1 special)
+                    // SUBA DAWASAK: 100% BULLETPROOF LOGIC FOR BOTH FORMATS
                     engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
+                    
+                    let tempNumbers = [];
+                    // Extract all possible standard numbers (N1 to N8)
                     for (let i = 1; i <= 8; i++) {
                         if (winInfo[`N${i}`] !== undefined && winInfo[`N${i}`] !== null && String(winInfo[`N${i}`]).trim() !== "") {
-                            numbersArray.push(String(winInfo[`N${i}`]));
+                            tempNumbers.push(String(winInfo[`N${i}`]));
                         }
                     }
+
+                    // Check if there is a special 4-digit number (SP1)
                     if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
-                        numbersArray.push(String(winInfo.SP1).padStart(4, '0'));
+                        let specialNumber = String(winInfo.SP1);
+                        
+                        // Critical Fix: Only pad to 4 digits if the value is actually greater than 9! 
+                        // Because sometimes NLB puts a single digit in SP1 instead of N7 by mistake.
+                        if (parseInt(specialNumber) > 9) {
+                            specialNumber = specialNumber.padStart(4, '0');
+                        }
+                        
+                        // Push standard numbers + the special number
+                        numbersArray = [...tempNumbers, specialNumber];
+                    } else {
+                        // Format 2: No special number, just 7 standard numbers
+                        numbersArray = [...tempNumbers];
                     }
                 } 
                 else if (lottery.code === 'jaya' || lottery.code === 'mahajana-sampatha') {
@@ -307,6 +324,5 @@ app.get('/api/search-result', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 Server running on port ${PORT}...`);
-    // Run fetch on startup (This will IMMEDIATELY fix the missing data!)
     await runAllScrapers(); 
 });
