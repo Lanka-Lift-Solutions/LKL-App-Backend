@@ -31,7 +31,6 @@ mongoose.connect(MONGO_URI)
   .then(async () => {
       console.log("✅ Database Connected Successfully!");
       
-      // 🧹 BUG FIX: Force Cleanup of Bad History Data
       try {
           const deleteResult = await Lottery.deleteMany({ 
               drawNo: '3073', 
@@ -128,32 +127,33 @@ async function fetchAndSaveNLBData() {
                     if (winInfo.CRANGE) numbersArray.push(String(winInfo.CRANGE));
                 } 
                 else if (lottery.code === 'suba-dawasak') {
-                    // SUBA DAWASAK: 100% BULLETPROOF LOGIC FOR BOTH FORMATS
+                    // --- BULLETPROOF SUBA DAWASAK LOGIC ---
                     engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
                     
-                    let tempNumbers = [];
-                    // Extract all possible standard numbers (N1 to N8)
-                    for (let i = 1; i <= 8; i++) {
-                        if (winInfo[`N${i}`] !== undefined && winInfo[`N${i}`] !== null && String(winInfo[`N${i}`]).trim() !== "") {
-                            tempNumbers.push(String(winInfo[`N${i}`]));
-                        }
+                    // Always get the first 3 standard numbers
+                    if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
+                    if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
+                    if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
+
+                    let sp = "";
+                    
+                    // Format 1: They split the 4-digit number into N4, N5, N6, N7 (e.g. 4, 8, 6, 6)
+                    if (winInfo.N4 !== undefined && winInfo.N5 !== undefined && winInfo.N6 !== undefined && winInfo.N7 !== undefined) {
+                        sp = String(winInfo.N4) + String(winInfo.N5) + String(winInfo.N6) + String(winInfo.N7);
+                    } 
+                    // Format 2: They put the whole 4-digit number into N4 (e.g. 4866)
+                    else if (winInfo.N4 !== undefined && String(winInfo.N4).length >= 3) {
+                        sp = String(winInfo.N4);
+                    } 
+                    // Format 3: Standard SP1 field used correctly
+                    else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
+                        sp = String(winInfo.SP1);
                     }
 
-                    // Check if there is a special 4-digit number (SP1)
-                    if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
-                        let specialNumber = String(winInfo.SP1);
-                        
-                        // Critical Fix: Only pad to 4 digits if the value is actually greater than 9! 
-                        // Because sometimes NLB puts a single digit in SP1 instead of N7 by mistake.
-                        if (parseInt(specialNumber) > 9) {
-                            specialNumber = specialNumber.padStart(4, '0');
-                        }
-                        
-                        // Push standard numbers + the special number
-                        numbersArray = [...tempNumbers, specialNumber];
-                    } else {
-                        // Format 2: No special number, just 7 standard numbers
-                        numbersArray = [...tempNumbers];
+                    // Pad it to always be 4 digits (fixes "4" typo to "0004")
+                    if (sp !== "") {
+                        sp = sp.padStart(4, '0');
+                        numbersArray.push(sp);
                     }
                 } 
                 else if (lottery.code === 'jaya' || lottery.code === 'mahajana-sampatha') {
@@ -324,5 +324,6 @@ app.get('/api/search-result', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 Server running on port ${PORT}...`);
+    // Run fetch on startup (This will IMMEDIATELY fix the missing data!)
     await runAllScrapers(); 
 });
