@@ -7,7 +7,6 @@ const cheerio = require('cheerio');
 
 const app = express();
 
-// --- 1. SECURITY: CORS Configuration ---
 const allowedOrigins = [
     'https://lkl-app-essentials-b7f0c4.gitlab.io', 
     'http://localhost:3000', 
@@ -24,28 +23,12 @@ app.use(cors({
     }
 }));
 
-// --- 2. Database Connection ---
 const MONGO_URI = "mongodb+srv://lanka_lift_solutions:LxXW74Xt1QzGLt46@cluster0.lz5w8jt.mongodb.net/LankaLiftDB?appName=Cluster0";
 
 mongoose.connect(MONGO_URI)
-  .then(async () => {
-      console.log("✅ Database Connected Successfully!");
-      
-      try {
-          const deleteResult = await Lottery.deleteMany({ 
-              drawNo: '3073', 
-              lotteryCode: { $ne: 'ada-kotipathi' } 
-          });
-          if (deleteResult.deletedCount > 0) {
-              console.log(`🧹 Cleaned up ${deleteResult.deletedCount} invalid history records.`);
-          }
-      } catch (err) {
-          console.error("Cleanup Error:", err.message);
-      }
-  })
+  .then(() => console.log("✅ Database Connected Successfully!"))
   .catch(err => console.error("❌ Database Connection Error:", err));
 
-// --- 3. Database Schema ---
 const LotterySchema = new mongoose.Schema({
     lotteryCode: String,
     lotteryName: String,
@@ -57,7 +40,6 @@ const LotterySchema = new mongoose.Schema({
 });
 const Lottery = mongoose.model('LotteryResult', LotterySchema);
 
-// --- 4. Lotteries Configuration ---
 const nlbLotteries = [
     { code: 'dhana-nidhanaya', name: 'Dhana Nidhanaya', id: '29022b19-c690-42d6-aacf-4128b4802bfa' },
     { code: 'ada-sampatha', name: 'Ada Sampatha', id: 'b4518a72-573e-4145-82c9-4c6dd91f8ec5' },
@@ -104,8 +86,6 @@ function extractZodiacFromUrl(url) {
     return "";
 }
 
-// --- 5. Data Fetching Functions ---
-
 async function fetchAndSaveNLBData() {
     console.log(`[${new Date().toLocaleString()}] 🔄 Running NLB Scraper...`);
     for (const lottery of nlbLotteries) {
@@ -120,71 +100,46 @@ async function fetchAndSaveNLBData() {
                 let numbersArray = [];
                 let engLetter = "";
                 
+                // Ada Sampatha (Always has ARANGE, BRANGE, CRANGE)
                 if (lottery.code === 'ada-sampatha') {
                     engLetter = winInfo.CHAR || "";
                     if (winInfo.ARANGE) numbersArray.push(String(winInfo.ARANGE));
                     if (winInfo.BRANGE) numbersArray.push(String(winInfo.BRANGE));
                     if (winInfo.CRANGE) numbersArray.push(String(winInfo.CRANGE));
                 } 
-                else if (lottery.code === 'suba-dawasak') {
-                    // --- BULLETPROOF SUBA DAWASAK LOGIC ---
-                    engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
-                    
-                    // Always get the first 3 standard numbers
-                    if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
-                    if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
-                    if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
-
-                    let sp = "";
-                    
-                    // Format 1: They split the 4-digit number into N4, N5, N6, N7 (e.g. 4, 8, 6, 6)
-                    if (winInfo.N4 !== undefined && winInfo.N5 !== undefined && winInfo.N6 !== undefined && winInfo.N7 !== undefined) {
-                        sp = String(winInfo.N4) + String(winInfo.N5) + String(winInfo.N6) + String(winInfo.N7);
-                    } 
-                    // Format 2: They put the whole 4-digit number into N4 (e.g. 4866)
-                    else if (winInfo.N4 !== undefined && String(winInfo.N4).length >= 3) {
-                        sp = String(winInfo.N4);
-                    } 
-                    // Format 3: Standard SP1 field used correctly
-                    else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
-                        sp = String(winInfo.SP1);
-                    }
-
-                    // Pad it to always be 4 digits (fixes "4" typo to "0004")
-                    if (sp !== "") {
-                        sp = sp.padStart(4, '0');
-                        numbersArray.push(sp);
-                    }
-                } 
+                // Jaya & Mahajana Sampatha (Always has RECD)
                 else if (lottery.code === 'jaya' || lottery.code === 'mahajana-sampatha') {
                     engLetter = winInfo.CHAR || "";
                     if (winInfo.RECD) numbersArray = String(winInfo.RECD).split(''); 
                     
-                    if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
-                        numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
-                    } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
-                        numbersArray.push(String(winInfo.SP1).padStart(4, '0'));
-                    }
+                    if (winInfo.SUN != null && String(winInfo.SUN).trim() !== "") numbersArray.push(String(winInfo.SUN).trim());
+                    if (winInfo.SP1 != null && String(winInfo.SP1).trim() !== "") numbersArray.push(String(winInfo.SP1).trim());
                 } 
+                // Handahana (Always N1 to N4)
                 else if (lottery.code === 'handahana') {
                     engLetter = winInfo.LAGNA ? getZodiacName(winInfo.LAGNA) : "";
-                    if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
-                    if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
-                    if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
-                    if (winInfo.N4 !== undefined) numbersArray.push(String(winInfo.N4));
-                } 
-                else {
-                    engLetter = winInfo.CHAR || ""; 
-                    for (let i = 1; i <= 8; i++) {
-                        if (winInfo[`N${i}`] !== undefined && String(winInfo[`N${i}`]).trim() !== "") {
-                            numbersArray.push(String(winInfo[`N${i}`]));
+                    for (let i = 1; i <= 4; i++) {
+                        if (winInfo[`N${i}`] != null && String(winInfo[`N${i}`]).trim() !== "") {
+                            numbersArray.push(String(winInfo[`N${i}`]).trim());
                         }
                     }
+                } 
+                // ALL OTHER LOTTERIES (Suba Dawasak, Dhana Nidhanaya, Govi Setha, Mega Power)
+                // "DUMB PIPE LOGIC" - Just push whatever valid numbers are found!
+                else {
+                    if (lottery.code === 'suba-dawasak') engLetter = winInfo.LG1 ? getZodiacName(winInfo.LG1) : "";
+                    else engLetter = winInfo.CHAR || "";
                     
-                    if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
-                        numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
-                    } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
-                        numbersArray.push(String(winInfo.SP1).padStart(4, '0'));
+                    for (let i = 1; i <= 8; i++) {
+                        if (winInfo[`N${i}`] != null && String(winInfo[`N${i}`]).trim() !== "") {
+                            numbersArray.push(String(winInfo[`N${i}`]).trim());
+                        }
+                    }
+                    if (winInfo.SP1 != null && String(winInfo.SP1).trim() !== "") {
+                        numbersArray.push(String(winInfo.SP1).trim());
+                    }
+                    if (winInfo.SUN != null && String(winInfo.SUN).trim() !== "") {
+                        numbersArray.push(String(winInfo.SUN).trim());
                     }
                 }
 
@@ -268,7 +223,6 @@ async function fetchAndSaveDLBData() {
     }
 }
 
-// Helper Wrappers for Cron
 async function runAllScrapers() {
     await fetchAndSaveNLBData();
     await fetchAndSaveDLBData();
@@ -277,14 +231,12 @@ async function runDLBScraperOnly() {
     await fetchAndSaveDLBData();
 }
 
-// --- 6. Cron Jobs ---
 cron.schedule('0 7,18 * * *', runDLBScraperOnly, { timezone: "Asia/Colombo" });
 cron.schedule('30 13 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('30,45 21 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0,15,30,45 22,23,0 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0 1 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 
-// --- 7. API Endpoints ---
 app.get('/api/ping', (req, res) => { res.status(200).send('Server is Awake and Running!'); });
 
 app.get('/api/latest-result', async (req, res) => {
@@ -320,10 +272,9 @@ app.get('/api/search-result', async (req, res) => {
     } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
-// --- 8. Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     console.log(`🚀 Server running on port ${PORT}...`);
-    // Run fetch on startup (This will IMMEDIATELY fix the missing data!)
+    // Run fetch on startup to overwrite bad data immediately
     await runAllScrapers(); 
 });
