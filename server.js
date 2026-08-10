@@ -11,7 +11,9 @@ const app = express();
 const allowedOrigins = [
     'https://lkl-app-essentials-b7f0c4.gitlab.io', 
     'http://localhost:3000', 
-    'http://127.0.0.1:5500'
+    'http://127.0.0.1:5500',
+    'http://localhost',       // Android Capacitor App සඳහා
+    'capacitor://localhost'   // iOS Capacitor App සඳහා
 ];
 
 app.use(cors({
