@@ -13,6 +13,7 @@ const allowedOrigins = [
     'http://localhost:3000', 
     'http://127.0.0.1:5500',
     'http://localhost',       // Android Capacitor App සඳහා
+    'https://localhost',
     'capacitor://localhost'   // iOS Capacitor App සඳහා
 ];
 
