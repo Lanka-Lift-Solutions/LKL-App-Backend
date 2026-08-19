@@ -7,14 +7,17 @@ const cheerio = require('cheerio');
 
 const app = express();
 
+// --- 0. JSON PARSER FOR ADMIN API ---
+app.use(express.json());
+
 // --- 1. SECURITY: CORS Configuration ---
 const allowedOrigins = [
     'https://lkl-app-essentials-b7f0c4.gitlab.io', 
     'http://localhost:3000', 
     'http://127.0.0.1:5500',
-    'http://localhost',       // Android Capacitor App සඳහා
+    'http://localhost',       // Android Capacitor App
     'https://localhost',
-    'capacitor://localhost'   // iOS Capacitor App සඳහා
+    'capacitor://localhost'   // iOS Capacitor App
 ];
 
 app.use(cors({
@@ -34,9 +37,6 @@ mongoose.connect(MONGO_URI)
   .then(async () => {
       console.log("✅ Database Connected Successfully!");
       
-      // 🧹 BUG FIX: Database Cleanup Script
-      // This explicitly deletes the "Dirty Data" (Draw 3073) that accidentally 
-      // saved under other lotteries during initial web scraping tests.
       try {
           const deleteResult = await Lottery.deleteMany({ 
               drawNo: '3073', 
@@ -59,7 +59,8 @@ const LotterySchema = new mongoose.Schema({
     date: String,
     numbers: [String],
     letter: String,
-    fetchedAt: { type: Date, default: Date.now }
+    fetchedAt: { type: Date, default: Date.now },
+    isManual: { type: Boolean, default: false } // Manual Lock Field
 });
 const Lottery = mongoose.model('LotteryResult', LotterySchema);
 
@@ -137,13 +138,11 @@ async function fetchAndSaveNLBData() {
                     if (winInfo.N1 !== undefined) numbersArray.push(String(winInfo.N1));
                     if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
                     if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
-                    // REMOVED: The SP1 4-digit number section has been deleted here.
                 } 
                 else if (lottery.code === 'jaya' || lottery.code === 'mahajana-sampatha') {
                     engLetter = winInfo.CHAR || "";
                     if (winInfo.RECD) numbersArray = String(winInfo.RECD).split(''); 
                     
-                    // SUNDAY SPECIAL FIX: Pad and add special number if exists (for Jaya)
                     if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
                         numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
                     } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
@@ -157,11 +156,8 @@ async function fetchAndSaveNLBData() {
                     if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
                     if (winInfo.N4 !== undefined) numbersArray.push(String(winInfo.N4));
                 }
-                
-                // --- MEGA POWER FIX ---
                 else if (lottery.code === 'mega-power') {
                     engLetter = winInfo.CHAR || "";
-                    
                     let specialNum = winInfo.SNO || winInfo.MAC || winInfo.M; 
                     
                     if (specialNum != null && String(specialNum).trim() !== "") {
@@ -174,17 +170,13 @@ async function fetchAndSaveNLBData() {
                         }
                     }
                 }
-
                 else {
-                    // Standard logic (Dhana Nidhanaya, Govi Setha, Mega Power)
-                    engLetter = winInfo.CHAR || ""; // Removed SUN from here to prevent letter bug
+                    engLetter = winInfo.CHAR || ""; 
                     for (let i = 1; i <= 8; i++) {
                         if (winInfo[`N${i}`] !== undefined && String(winInfo[`N${i}`]).trim() !== "") {
                             numbersArray.push(String(winInfo[`N${i}`]));
                         }
                     }
-                    
-                    // SUNDAY SPECIAL FIX: (For Dhana Nidhanaya)
                     if (winInfo.SUN !== undefined && winInfo.SUN !== null && String(winInfo.SUN).trim() !== "") {
                         numbersArray.push(String(winInfo.SUN).padStart(4, '0'));
                     } else if (winInfo.SP1 !== undefined && winInfo.SP1 !== null && String(winInfo.SP1).trim() !== "") {
@@ -192,11 +184,18 @@ async function fetchAndSaveNLBData() {
                     }
                 }
 
-                await Lottery.findOneAndUpdate(
-                    { lotteryCode: lottery.code, drawNo: drawNo },
-                    { lotteryName: lottery.name, date: draw.DrawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
-                    { upsert: true, returnDocument: 'after' }
-                );
+                // --- NLB Update Logic (With Lock) ---
+                const existingDraw = await Lottery.findOne({ lotteryCode: lottery.code, drawNo: drawNo });
+                
+                if (existingDraw && existingDraw.isManual === true) {
+                    console.log(`🔒 Skipped NLB Update: ${lottery.name} Draw ${drawNo} is manually locked.`);
+                } else {
+                    await Lottery.findOneAndUpdate(
+                        { lotteryCode: lottery.code, drawNo: drawNo },
+                        { lotteryName: lottery.name, date: draw.DrawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date(), isManual: false },
+                        { upsert: true, returnDocument: 'after' }
+                    );
+                }
             }
             console.log(`✅ NLB Updated: ${lottery.name} (Top 3 draws check complete)`);
         } catch (error) {
@@ -260,13 +259,20 @@ async function fetchAndSaveDLBData() {
                 }
             });
 
+            // --- DLB Update Logic (With Lock) ---
             if (numbersArray.length > 0 || engLetter !== "") {
-                await Lottery.findOneAndUpdate(
-                    { lotteryCode: lottery.code, drawNo: drawNo },
-                    { lotteryName: lottery.name, date: drawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date() },
-                    { upsert: true, returnDocument: 'after' }
-                );
-                console.log(`✅ DLB Scraped & Updated: ${lottery.name} (Draw: ${drawNo})`);
+                const existingDraw = await Lottery.findOne({ lotteryCode: lottery.code, drawNo: drawNo });
+                
+                if (existingDraw && existingDraw.isManual === true) {
+                    console.log(`🔒 Skipped DLB Update: ${lottery.name} Draw ${drawNo} is manually locked.`);
+                } else {
+                    await Lottery.findOneAndUpdate(
+                        { lotteryCode: lottery.code, drawNo: drawNo },
+                        { lotteryName: lottery.name, date: drawDate, numbers: numbersArray, letter: engLetter, fetchedAt: new Date(), isManual: false },
+                        { upsert: true, returnDocument: 'after' }
+                    );
+                    console.log(`✅ DLB Scraped & Updated: ${lottery.name} (Draw: ${drawNo})`);
+                }
             }
         }
     } catch (error) {
@@ -284,27 +290,18 @@ async function runDLBScraperOnly() {
 }
 
 // --- 6. Cron Jobs ---
-
-// 1. DLB Exclusive Checks: 7:00 AM and 6:30 PM (18:30)
 cron.schedule('0 7,18 * * *', runDLBScraperOnly, { timezone: "Asia/Colombo" });
-
-// 2. Combined Check (NLB + DLB) at 1:30 PM (13:30)
 cron.schedule('30 13 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
-
-// 3. Night Polling (9:30 PM to 1:00 AM) - Every 15 minutes for both NLB & DLB
 cron.schedule('30,45 21 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0,15,30,45 22,23,0 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 cron.schedule('0 1 * * *', runAllScrapers, { timezone: "Asia/Colombo" });
 
 
 // --- 7. API Endpoints ---
-
-// Endpoint for UptimeRobot
 app.get('/api/ping', (req, res) => {
     res.status(200).send('Server is Awake and Running!');
 });
 
-// Endpoint 1: Get the absolute latest result
 app.get('/api/latest-result', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -318,7 +315,6 @@ app.get('/api/latest-result', async (req, res) => {
     }
 });
 
-// Endpoint 2: Get History
 app.get('/api/history', async (req, res) => {
     try {
         const reqCode = req.query.lottery;
@@ -332,7 +328,6 @@ app.get('/api/history', async (req, res) => {
     }
 });
 
-// Endpoint 3: Search Specific Result
 app.get('/api/search-result', async (req, res) => {
     try {
         const { lottery, drawNo } = req.query;
@@ -373,11 +368,9 @@ app.get('/api/statistics', async (req, res) => {
 
         const conf = statsConfig[reqCode];
         
-        // Get date exactly 30 days ago
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-        // Fetch draws strictly within the last 30 days
         const draws = await Lottery.find({ 
             lotteryCode: reqCode,
             fetchedAt: { $gte: thirtyDaysAgo } 
@@ -386,13 +379,10 @@ app.get('/api/statistics', async (req, res) => {
         let numFreq = {};
         let letterFreq = {};
 
-        // 1. Process Raw Data
         draws.forEach(d => {
-            // Get only the exact amount of numbers allowed for this lottery
             const nums = d.numbers.slice(0, conf.numLimit);
             nums.forEach(n => {
                 let parsed = String(n).trim();
-                // If it's a double-digit lottery, force 0 padding (e.g. 8 -> 08)
                 if (conf.numRange === '01-80') {
                     parsed = String(parseInt(parsed)).padStart(2, '0');
                 }
@@ -404,7 +394,6 @@ app.get('/api/statistics', async (req, res) => {
             }
         });
 
-        // 2. Build Full Ranges for Cold Checking
         let fullNumRange = [];
         if (conf.numRange === '01-80') {
             for (let i = 1; i <= 80; i++) fullNumRange.push(String(i).padStart(2, '0'));
@@ -412,18 +401,15 @@ app.get('/api/statistics', async (req, res) => {
             for (let i = 0; i <= 9; i++) fullNumRange.push(String(i));
         }
 
-        // 3. Hot Numbers (Top 5) - Sort by count descending, then random for ties
         let allNumsWithCount = fullNumRange.map(v => ({ val: v, count: numFreq[v] || 0 }));
         let hotNumbers = [...allNumsWithCount]
             .sort((a, b) => b.count !== a.count ? b.count - a.count : Math.random() - 0.5)
             .slice(0, 5);
 
-        // 4. Cold Numbers (Top 5) - Sort by count ascending (zeros first), then random for ties
         let coldNumbers = [...allNumsWithCount]
             .sort((a, b) => a.count !== b.count ? a.count - b.count : Math.random() - 0.5)
             .slice(0, 5);
 
-        // 5. Hot Letters / Zodiacs
         let hotLetters = [];
         if (conf.letterType !== 'None') {
             let fullLetterRange = [];
@@ -448,6 +434,45 @@ app.get('/api/statistics', async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ error: "Server Error calculating statistics." });
+    }
+});
+
+// --- 7.8 ADMIN API (Manual Data Entry & Lock) ---
+const ADMIN_PASSWORD = "LKL#TOL525*";
+
+app.post('/api/admin/update-result', async (req, res) => {
+    try {
+        const { password, lotteryCode, lotteryName, drawNo, date, numbers, letter } = req.body;
+
+        // 1. Validate Password
+        if (password !== ADMIN_PASSWORD) {
+            return res.status(401).json({ success: false, message: "Unauthorized: Incorrect Password" });
+        }
+
+        // 2. Validate essential fields
+        if (!lotteryCode || !drawNo || !date) {
+            return res.status(400).json({ success: false, message: "Missing required fields." });
+        }
+
+        // 3. Upsert data and flag as manually entered
+        const updated = await Lottery.findOneAndUpdate(
+            { lotteryCode: lotteryCode, drawNo: String(drawNo) },
+            { 
+                lotteryName: lotteryName, 
+                date: new Date(date).toISOString(), 
+                numbers: numbers || [], 
+                letter: letter || "", 
+                fetchedAt: new Date(),
+                isManual: true 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({ success: true, message: "Successfully updated and locked!", data: updated });
+
+    } catch (error) {
+        console.error("Admin API Error:", error);
+        res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 });
 
