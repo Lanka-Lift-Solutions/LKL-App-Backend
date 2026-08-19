@@ -162,7 +162,7 @@ async function fetchAndSaveNLBData() {
                 else if (lottery.code === 'mega-power') {
                     engLetter = winInfo.CHAR || "";
                     
-                    let specialNum = winInfo.SECRET_FIELD || winInfo.MAC || winInfo.M; 
+                    let specialNum = winInfo.SNO || winInfo.MAC || winInfo.M; 
                     
                     if (specialNum != null && String(specialNum).trim() !== "") {
                         numbersArray.push(String(specialNum).trim());
