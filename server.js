@@ -103,8 +103,8 @@ function extractZodiacFromUrl(url) {
     if (u.includes('sinha')) return 'Leo';
     if (u.includes('kanya')) return 'Virgo';
     if (u.includes('thula')) return 'Libra';
-    if (u.includes('vruchika') || u.includes('vrushchika')) return 'Scorpio';
-    if (u.includes('dhanu')) return 'Sagittarius';
+    if (u.includes('vushchika') || u.includes('vrushchika')) return 'Scorpio';
+    if (u.includes('danu') || u.includes('dhanu')) return 'Sagittarius';
     if (u.includes('makara')) return 'Capricorn';
     if (u.includes('kumba') || u.includes('kumbha')) return 'Aquarius';
     if (u.includes('meena')) return 'Pisces';
@@ -379,10 +379,21 @@ app.get('/api/statistics', async (req, res) => {
         let numFreq = {};
         let letterFreq = {};
 
+        // 1. Process Raw Data
         draws.forEach(d => {
-            const nums = d.numbers.slice(0, conf.numLimit);
-            nums.forEach(n => {
+            let numsToProcess = [];
+
+            // --- ADA SAMPATHA FIX ---
+            // Database එකේ ඇති ["222", "220", "222"] වැනි අංක තනි ඉලක්කම් වලට කැඩීම
+            if (reqCode === 'ada-sampatha') {
+                numsToProcess = d.numbers.join('').split('').slice(0, conf.numLimit);
+            } else {
+                numsToProcess = d.numbers.slice(0, conf.numLimit);
+            }
+
+            numsToProcess.forEach(n => {
                 let parsed = String(n).trim();
+                // If it's a double-digit lottery, force 0 padding (e.g. 8 -> 08)
                 if (conf.numRange === '01-80') {
                     parsed = String(parseInt(parsed)).padStart(2, '0');
                 }
