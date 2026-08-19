@@ -156,7 +156,25 @@ async function fetchAndSaveNLBData() {
                     if (winInfo.N2 !== undefined) numbersArray.push(String(winInfo.N2));
                     if (winInfo.N3 !== undefined) numbersArray.push(String(winInfo.N3));
                     if (winInfo.N4 !== undefined) numbersArray.push(String(winInfo.N4));
-                } 
+                }
+                
+                // --- MEGA POWER FIX ---
+                else if (lottery.code === 'mega-power') {
+                    engLetter = winInfo.CHAR || "";
+                    
+                    let specialNum = winInfo.SECRET_FIELD || winInfo.MAC || winInfo.M; 
+                    
+                    if (specialNum != null && String(specialNum).trim() !== "") {
+                        numbersArray.push(String(specialNum).trim());
+                    }
+
+                    for (let i = 1; i <= 4; i++) {
+                        if (winInfo[`N${i}`] != null && String(winInfo[`N${i}`]).trim() !== "") {
+                            numbersArray.push(String(winInfo[`N${i}`]).trim());
+                        }
+                    }
+                }
+
                 else {
                     // Standard logic (Dhana Nidhanaya, Govi Setha, Mega Power)
                     engLetter = winInfo.CHAR || ""; // Removed SUN from here to prevent letter bug
