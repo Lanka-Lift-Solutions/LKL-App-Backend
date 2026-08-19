@@ -346,6 +346,111 @@ app.get('/api/search-result', async (req, res) => {
     }
 });
 
+// --- 7.5 Statistics API (Hot & Cold Logic) ---
+const statsConfig = {
+    'govi-setha': { numRange: '01-80', letterType: 'A-Z', numLimit: 4 },
+    'suba-dawasak': { numRange: '01-80', letterType: 'Zodiac', numLimit: 3 },
+    'mahajana-sampatha': { numRange: '0-9', letterType: 'A-Z', numLimit: 6 },
+    'dhana-nidhanaya': { numRange: '01-80', letterType: 'A-Z', numLimit: 4 },
+    'mega-power': { numRange: '01-80', letterType: 'A-Z', numLimit: 5 },
+    'handahana': { numRange: '01-80', letterType: 'Zodiac', numLimit: 4 },
+    'ada-sampatha': { numRange: '0-9', letterType: 'A-Z', numLimit: 9 },
+    'jaya': { numRange: '0-9', letterType: 'A-Z', numLimit: 4 },
+    'ada-kotipathi': { numRange: '01-80', letterType: 'A-Z', numLimit: 4 },
+    'shanida': { numRange: '01-80', letterType: 'A-Z', numLimit: 4 },
+    'lagna-wasana': { numRange: '01-80', letterType: 'Zodiac', numLimit: 4 },
+    'dhana-sampatha': { numRange: '0-9', letterType: 'A-Z', numLimit: 6 },
+    'super-ball': { numRange: '01-80', letterType: 'A-Z', numLimit: 4 },
+    'kapruka': { numRange: '01-80', letterType: 'A-Z', numLimit: 5 },
+    'sasiri': { numRange: '01-80', letterType: 'None', numLimit: 3 },
+    'jaya-sampatha': { numRange: '0-9', letterType: 'A-Z', numLimit: 4 }
+};
+
+app.get('/api/statistics', async (req, res) => {
+    try {
+        const reqCode = req.query.lottery;
+        if (!reqCode || !statsConfig[reqCode]) return res.status(400).json({ error: "Valid Lottery code is required." });
+
+        const conf = statsConfig[reqCode];
+        
+        // Get date exactly 30 days ago
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        // Fetch draws strictly within the last 30 days
+        const draws = await Lottery.find({ 
+            lotteryCode: reqCode,
+            fetchedAt: { $gte: thirtyDaysAgo } 
+        });
+
+        let numFreq = {};
+        let letterFreq = {};
+
+        // 1. Process Raw Data
+        draws.forEach(d => {
+            // Get only the exact amount of numbers allowed for this lottery
+            const nums = d.numbers.slice(0, conf.numLimit);
+            nums.forEach(n => {
+                let parsed = String(n).trim();
+                // If it's a double-digit lottery, force 0 padding (e.g. 8 -> 08)
+                if (conf.numRange === '01-80') {
+                    parsed = String(parseInt(parsed)).padStart(2, '0');
+                }
+                numFreq[parsed] = (numFreq[parsed] || 0) + 1;
+            });
+
+            if (conf.letterType !== 'None' && d.letter && d.letter.trim() !== "") {
+                letterFreq[d.letter] = (letterFreq[d.letter] || 0) + 1;
+            }
+        });
+
+        // 2. Build Full Ranges for Cold Checking
+        let fullNumRange = [];
+        if (conf.numRange === '01-80') {
+            for (let i = 1; i <= 80; i++) fullNumRange.push(String(i).padStart(2, '0'));
+        } else {
+            for (let i = 0; i <= 9; i++) fullNumRange.push(String(i));
+        }
+
+        // 3. Hot Numbers (Top 5) - Sort by count descending, then random for ties
+        let allNumsWithCount = fullNumRange.map(v => ({ val: v, count: numFreq[v] || 0 }));
+        let hotNumbers = [...allNumsWithCount]
+            .sort((a, b) => b.count !== a.count ? b.count - a.count : Math.random() - 0.5)
+            .slice(0, 5);
+
+        // 4. Cold Numbers (Top 5) - Sort by count ascending (zeros first), then random for ties
+        let coldNumbers = [...allNumsWithCount]
+            .sort((a, b) => a.count !== b.count ? a.count - b.count : Math.random() - 0.5)
+            .slice(0, 5);
+
+        // 5. Hot Letters / Zodiacs
+        let hotLetters = [];
+        if (conf.letterType !== 'None') {
+            let fullLetterRange = [];
+            if (conf.letterType === 'A-Z') {
+                for (let i = 65; i <= 90; i++) fullLetterRange.push(String.fromCharCode(i));
+            } else {
+                fullLetterRange = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"];
+            }
+
+            let allLettersWithCount = fullLetterRange.map(v => ({ val: v, count: letterFreq[v] || 0 }));
+            hotLetters = [...allLettersWithCount]
+                .sort((a, b) => b.count !== a.count ? b.count - a.count : Math.random() - 0.5)
+                .slice(0, 5);
+        }
+
+        res.json({
+            hotNumbers,
+            coldNumbers,
+            hotLetters,
+            letterType: conf.letterType
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: "Server Error calculating statistics." });
+    }
+});
+
 // --- 8. Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
